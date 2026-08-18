@@ -37,25 +37,37 @@ __all__ = [
     "__version__",
 ]
 
-# MCP tool functions are exported lazily (only if user needs them, avoid mcp import
-# at package load — keeps core importable in environments without mcp package)
+# MCP tool functions + refute helpers are exported lazily (avoid mcp/subprocess imports
+# at package load — keeps core importable in constrained environments)
 def __getattr__(name: str):
     if name in (
         "tool_create_audit_chain",
         "tool_append_audit_entry",
         "tool_verify_audit_chain",
         "tool_record_verdict",
+        "tool_refute_lean",
     ):
         from .mcp import (
             tool_create_audit_chain,
             tool_append_audit_entry,
             tool_verify_audit_chain,
             tool_record_verdict,
+            tool_refute_lean,
         )
         return {
             "tool_create_audit_chain": tool_create_audit_chain,
             "tool_append_audit_entry": tool_append_audit_entry,
             "tool_verify_audit_chain": tool_verify_audit_chain,
             "tool_record_verdict": tool_record_verdict,
+            "tool_refute_lean": tool_refute_lean,
         }[name]
+    if name in (
+        "refute_lean_source",
+        "parse_lean_axioms",
+        "classify_axioms",
+        "DEFAULT_ALLOWED_AXIOMS",
+        "AxiomParseResult",
+    ):
+        from . import refute as _refute
+        return getattr(_refute, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

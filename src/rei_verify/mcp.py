@@ -197,6 +197,67 @@ def tool_record_verdict(
     }
 
 
+def tool_refute_lean(
+    chain_id: str,
+    claim: str,
+    lean_source: str,
+    theorem_name: str,
+    allow_axioms: list[str] | None = None,
+    timeout_sec: int = 120,
+) -> dict[str, Any]:
+    """Lean 4 source を 実行、 theorem_name が 許可 axiom のみで 証明されているか verify。
+
+    Verdict rule ([[feedback-zero-sorry-floor]] 型化):
+      - lean 不在 / source 空 / theorem 名 空 / theorem 名 が source に無い
+          → INCOMPLETE_FRAME
+      - lean 実行 exit != 0                     → REFUTED (build error を witness)
+      - sorryAx / native_decide / disallowed axiom → HOLDING (dimension marker)
+      - 上記 全て clean                          → CONFIRMED
+
+    Returns:
+      success: {"verdict", "markers", "audit_hashes", "duration_ms", "dfumt"}
+      error: {"error": str, "dfumt": "FALSE"}
+    """
+    chain = _CHAINS.get(chain_id)
+    if chain is None:
+        return {"error": f"chain not found: {chain_id!r}", "dfumt": "FALSE"}
+    if not claim or not claim.strip():
+        return {"error": "claim must be non-empty", "dfumt": "FALSE"}
+    # Note: lean_source / theorem_name empty checks は refute_lean_source 側の
+    # pre_check で INCOMPLETE_FRAME に変換される (input validation error にせず、
+    # 型的 verdict として 返すのが 反証機械の 一貫性)。
+
+    # deferred import (mcp package layer と refute layer の 分離維持)
+    from .refute import refute_lean_source
+    from .core import Verdict
+
+    result = refute_lean_source(
+        claim=claim,
+        lean_source=lean_source,
+        audit=chain,
+        theorem_name=theorem_name,
+        allow_axioms=allow_axioms,
+        timeout_sec=timeout_sec,
+    )
+
+    dfumt_map = {
+        "confirmed": "TRUE",
+        "refuted": "FALSE",
+        "holding": "NEITHER",
+        "incomplete_frame": "ZERO",
+    }
+    return {
+        "verdict": result.verdict.value,
+        "markers": [m.to_dict() for m in result.markers],
+        "audit_hashes": result.audit_hashes,
+        "claim": result.claim,
+        "started_at": result.started_at,
+        "ended_at": result.ended_at,
+        "duration_ms": result.duration_ms,
+        "dfumt": dfumt_map.get(result.verdict.value, "UNKNOWN"),
+    }
+
+
 def _reset_state_for_test() -> None:
     """test hook: in-memory registry を clear。 file は 触らず。"""
     _CHAINS.clear()
@@ -259,6 +320,43 @@ def _register_mcp():
     def verify_audit_chain(chain_id: str) -> dict[str, Any]:
         """chain integrity を verify。 tamper 検出時は ok=False + broken_at で 位置特定。"""
         return tool_verify_audit_chain(chain_id)
+
+    @server.tool()
+    def refute_lean(
+        chain_id: str,
+        claim: str,
+        lean_source: str,
+        theorem_name: str,
+        allow_axioms: list[str] | None = None,
+        timeout_sec: int = 120,
+    ) -> dict[str, Any]:
+        """Lean 4 source を 実行、 theorem_name が 許可 axiom のみで 証明されているか verify。
+
+        Verdict rule ([[feedback-zero-sorry-floor]] 型化):
+          lean 不在 or source/theorem 空 → INCOMPLETE_FRAME
+          lean 実行 exit != 0            → REFUTED (build error witness)
+          sorryAx / native_decide / disallowed → HOLDING
+          上記全て clean                  → CONFIRMED
+
+        Args:
+          chain_id: create_audit_chain で 得た id。 verdict + phase entries が chain に記録される。
+          claim: 検証対象の 主張 (自然言語 or 形式命題)。
+          lean_source: Lean 4 source (単一 file 想定、 Mathlib 依存 は lake project 経由が別 iter)。
+          theorem_name: source 内の 対象 theorem 名 (`#print axioms {theorem_name}` を末尾追加)。
+          allow_axioms: 許可 axiom list。 default = ["propext", "Classical.choice", "Quot.sound"]。
+          timeout_sec: lean subprocess timeout (default 120)。
+
+        Returns:
+          {"verdict", "markers", "audit_hashes", "duration_ms", "dfumt"}
+        """
+        return tool_refute_lean(
+            chain_id=chain_id,
+            claim=claim,
+            lean_source=lean_source,
+            theorem_name=theorem_name,
+            allow_axioms=allow_axioms,
+            timeout_sec=timeout_sec,
+        )
 
     @server.tool()
     def record_verdict(

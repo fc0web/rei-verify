@@ -48,6 +48,7 @@ def __getattr__(name: str):
         "tool_refute_lean",
         "tool_search_counterexample_explicit",
         "tool_assert_breakpoints_explicit",
+        "tool_hold_verdict",
     ):
         from .mcp import (
             tool_create_audit_chain,
@@ -57,6 +58,7 @@ def __getattr__(name: str):
             tool_refute_lean,
             tool_search_counterexample_explicit,
             tool_assert_breakpoints_explicit,
+            tool_hold_verdict,
         )
         return {
             "tool_create_audit_chain": tool_create_audit_chain,
@@ -66,6 +68,7 @@ def __getattr__(name: str):
             "tool_refute_lean": tool_refute_lean,
             "tool_search_counterexample_explicit": tool_search_counterexample_explicit,
             "tool_assert_breakpoints_explicit": tool_assert_breakpoints_explicit,
+            "tool_hold_verdict": tool_hold_verdict,
         }[name]
     if name in (
         "refute_lean_source",
@@ -89,4 +92,7 @@ def __getattr__(name: str):
     ):
         from . import breakpoint as _bp
         return getattr(_bp, name)
+    if name == "hold_verdict":
+        from . import hold as _hold
+        return _hold.hold_verdict
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

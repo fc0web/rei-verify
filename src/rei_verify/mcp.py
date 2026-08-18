@@ -449,6 +449,91 @@ def tool_assert_breakpoints_explicit(
     }
 
 
+def tool_hold_verdict(
+    chain_id: str,
+    claim: str,
+    markers: list[dict],
+    notes: str = "",
+    require_multi_dimension: bool = False,
+) -> dict[str, Any]:
+    """宣言的 HOLDING verdict を audit trail 付きで 生成 (反証機械 4 番目 tool)。
+
+    他 3 tool (refute_lean / search_counterexample / assert_breakpoints) が 「実行」
+    による verdict 決定 なのに対し、 hold_verdict は 「caller の 手作業 refutation の
+    到達状態」 を 型的に articulate する 宣言 tool。
+
+    Args:
+      chain_id: create_audit_chain で 得た id。
+      claim: 検証対象の 主張。
+      markers: list of {dimension, what_was_tried, what_was_not_tried, reason}。
+               1 個以上 必須 (empty は INCOMPLETE_FRAME)。
+               dimension は "search_space" | "witness_type" | "compute_budget" | "frame" のみ。
+      notes: 追加 free-text メモ。
+      require_multi_dimension: True で 単一 dimension HOLDING に augmentation marker 追加。
+
+    Returns:
+      success: {"verdict", "markers", "audit_hashes", "duration_ms", "dfumt"}
+      error:   {"error", "dfumt": "FALSE"}
+    """
+    chain = _CHAINS.get(chain_id)
+    if chain is None:
+        return {"error": f"chain not found: {chain_id!r}", "dfumt": "FALSE"}
+    if not claim or not claim.strip():
+        return {"error": "claim must be non-empty", "dfumt": "FALSE"}
+    if not isinstance(markers, list):
+        return {
+            "error": f"markers must be list, got {type(markers).__name__}",
+            "dfumt": "FALSE",
+        }
+
+    from .hold import hold_verdict
+    from .core import IncompleteMarker
+
+    # dict → IncompleteMarker (validation を primitive 型で 発火)
+    parsed_markers: list[IncompleteMarker] = []
+    for i, m in enumerate(markers):
+        if not isinstance(m, dict):
+            return {
+                "error": f"markers[{i}] must be dict with dimension/what_was_tried/what_was_not_tried/reason",
+                "dfumt": "FALSE",
+            }
+        try:
+            parsed_markers.append(IncompleteMarker(
+                dimension=m.get("dimension", ""),
+                what_was_tried=m.get("what_was_tried", ""),
+                what_was_not_tried=m.get("what_was_not_tried", ""),
+                reason=m.get("reason", ""),
+            ))
+        except ValueError as e:
+            return {"error": f"markers[{i}] invalid: {e}", "dfumt": "FALSE"}
+
+    # notes は 引数として hold_verdict に 渡す (audit entry に 記録)
+    result = hold_verdict(
+        claim=claim,
+        markers=parsed_markers,
+        audit=chain,
+        notes=notes,
+        require_multi_dimension=require_multi_dimension,
+    )
+
+    dfumt_map = {
+        "confirmed": "TRUE",
+        "refuted": "FALSE",
+        "holding": "NEITHER",
+        "incomplete_frame": "ZERO",
+    }
+    return {
+        "verdict": result.verdict.value,
+        "markers": [m.to_dict() for m in result.markers],
+        "audit_hashes": result.audit_hashes,
+        "claim": result.claim,
+        "started_at": result.started_at,
+        "ended_at": result.ended_at,
+        "duration_ms": result.duration_ms,
+        "dfumt": dfumt_map.get(result.verdict.value, "UNKNOWN"),
+    }
+
+
 def _reset_state_for_test() -> None:
     """test hook: in-memory registry を clear。 file は 触らず。"""
     _CHAINS.clear()
@@ -612,6 +697,37 @@ def _register_mcp():
             chain_id=chain_id, claim=claim, breakpoints=breakpoints,
             stop_on_first_failure=stop_on_first_failure,
             max_time_sec=max_time_sec,
+        )
+
+    @server.tool()
+    def hold_verdict_tool(
+        chain_id: str,
+        claim: str,
+        markers: list[dict],
+        notes: str = "",
+        require_multi_dimension: bool = False,
+    ) -> dict[str, Any]:
+        """宣言的 HOLDING verdict (反証機械 4th tool、 「保留の 型化」)。
+
+        他 3 tool (refute_lean / search_counterexample / assert_breakpoints) が 実行
+        による verdict 決定なのに対し、 hold_verdict は 「caller の 手作業 refutation の
+        到達状態」 を 型的に articulate する 宣言 tool。
+
+        Args:
+          chain_id: create_audit_chain で 得た id。
+          claim: 検証対象の 主張。
+          markers: list of {dimension, what_was_tried, what_was_not_tried, reason}。
+                   1 個以上 必須 (empty は INCOMPLETE_FRAME に routing)。
+          notes: 追加 free-text メモ。
+          require_multi_dimension: True で 単一 dim HOLDING に augmentation marker 追加。
+
+        Verdict:
+          markers 空 / 型不正 → INCOMPLETE_FRAME
+          markers 有効        → HOLDING (caller markers verbatim + optional augmentation)
+        """
+        return tool_hold_verdict(
+            chain_id=chain_id, claim=claim, markers=markers, notes=notes,
+            require_multi_dimension=require_multi_dimension,
         )
 
     @server.tool()

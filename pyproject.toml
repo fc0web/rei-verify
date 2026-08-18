@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rei-verify"
+version = "0.1.0a1"
+description = "反証機械 (refutation machine) の 心臓部を 支える 4 primitives (Verdict / IncompleteMarker / AuditChain / VerifiedExecution) + MCP wrapper"
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Nobuki Fujimoto" },
+]
+keywords = [
+    "verification",
+    "refutation",
+    "audit",
+    "hash-chain",
+    "mcp",
+    "model-context-protocol",
+    "reasoning",
+    "lean4",
+    "rei-aios",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Testing",
+    "Natural Language :: Japanese",
+    "Natural Language :: English",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# MCP wrapper を 使う場合のみ必要。 core primitives (Verdict / AuditChain / VerifiedExecution) は
+# mcp package 不在でも 動作する (graceful degradation)。
+mcp = [
+    "mcp>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/fc0web/rei-verify"
+Repository = "https://github.com/fc0web/rei-verify"
+Issues = "https://github.com/fc0web/rei-verify/issues"
+
+[project.scripts]
+rei-verify = "rei_verify.mcp:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

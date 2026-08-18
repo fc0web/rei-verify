@@ -234,17 +234,28 @@ class RestrictedExpressionError(ValueError):
     """restricted expression の 構文 or eval error。 caller に 直接返す。"""
 
 
-def compile_predicate_expression(expr: str) -> Callable[[Any], bool]:
-    """`x` variable を 受け取る expression string を callable に compile。
+def compile_predicate_expression(
+    expr: str,
+    var_name: str = "x",
+) -> Callable[[Any], bool]:
+    """`var_name` variable を 受け取る expression string を callable に compile。
 
     使い方例:
       p = compile_predicate_expression("x % 2 == 0 and x > 100")
       p(150)  # True
 
+      # breakpoint 用途では var_name="ctx" で dict binding 想定
+      p = compile_predicate_expression("ctx['n'] > 0", var_name="ctx")
+      p({"n": 5})  # True
+
     許可された builtins は _SAFE_BUILTINS のみ (import / attribute access は blocked)。
     """
     if not isinstance(expr, str) or not expr.strip():
         raise RestrictedExpressionError("predicate expression must be non-empty string")
+    if not var_name or not var_name.isidentifier():
+        raise RestrictedExpressionError(
+            f"var_name must be valid Python identifier, got {var_name!r}"
+        )
 
     # 危険 substring の 事前拒否 (完全防御ではないが 第 1 段 filter)
     forbidden = ["__", "import", "exec(", "eval(", "open(", "compile(", "globals(", "locals("]
@@ -260,11 +271,12 @@ def compile_predicate_expression(expr: str) -> Callable[[Any], bool]:
     except SyntaxError as e:
         raise RestrictedExpressionError(f"predicate SyntaxError: {e}")
 
-    def predicate(x: Any) -> bool:
+    def predicate(value: Any) -> bool:
         try:
-            result = eval(code, {"__builtins__": _SAFE_BUILTINS}, {"x": x})
-        except BaseException as e:
-            # per-sample error は search_counterexample 側で predicate_errors として集計
+            result = eval(code, {"__builtins__": _SAFE_BUILTINS}, {var_name: value})
+        except BaseException:
+            # per-sample error は caller (search_counterexample / assert_breakpoints)
+            # 側で 集計、 raise を そのまま 上げる
             raise
         return bool(result)
 

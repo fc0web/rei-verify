@@ -342,6 +342,113 @@ def tool_search_counterexample_explicit(
     }
 
 
+def tool_assert_breakpoints_explicit(
+    chain_id: str,
+    claim: str,
+    breakpoints: list[dict],
+    stop_on_first_failure: bool = True,
+    max_time_sec: float = 60.0,
+) -> dict[str, Any]:
+    """explicit list of {label, assertion_expr, context} で labeled breakpoints を検査。
+
+    各 breakpoint dict は:
+      "label": str (required、 人間可読 名前 - witness marker に埋め込み)
+      "assertion_expr": str (required、 `ctx` を binding とする expression、
+                            True return で 「この point で claim 保たれた」)
+      "context": dict (optional、 default {}、 assertion_expr が ctx['xxx'] で 参照可能)
+
+    Verdict rule ([[feedback-one-reproduction-over-ten-unverified]] 型化):
+      breakpoints 空 or 型不正                    → INCOMPLETE_FRAME
+      任意 assertion False                         → REFUTED (label + context を witness)
+      全 assertion pass                            → HOLDING (search_space marker、
+                                                   「exhaustion of listed checkpoints ≠ 全 case cover」)
+      assertion raise                              → frame marker 併記
+      max_time_sec 到達で 未実行 breakpoint 残る    → compute_budget marker 併記
+
+    Example:
+      breakpoints=[
+        {"label": "t1=1 case", "assertion_expr": "ctx['descent'] < 0",
+         "context": {"n": 27, "descent": -0.5}},
+        {"label": "t1=2 boundary", "assertion_expr": "ctx['bound'] <= 2",
+         "context": {"n": 4, "bound": 1.8}},
+      ]
+
+    Returns:
+      success: {"verdict", "markers", "audit_hashes", "duration_ms", "dfumt"}
+      error:   {"error", "dfumt": "FALSE"}
+    """
+    chain = _CHAINS.get(chain_id)
+    if chain is None:
+        return {"error": f"chain not found: {chain_id!r}", "dfumt": "FALSE"}
+    if not claim or not claim.strip():
+        return {"error": "claim must be non-empty", "dfumt": "FALSE"}
+    if not isinstance(breakpoints, list):
+        return {"error": f"breakpoints must be list, got {type(breakpoints).__name__}", "dfumt": "FALSE"}
+    if not breakpoints:
+        # empty list は pre_check False で INCOMPLETE_FRAME になる path、 error 化しない
+        pass
+
+    from .search import compile_predicate_expression, RestrictedExpressionError
+    from .breakpoint import Breakpoint, assert_breakpoints
+
+    parsed: list[Breakpoint] = []
+    for i, bp_dict in enumerate(breakpoints):
+        if not isinstance(bp_dict, dict):
+            return {
+                "error": f"breakpoints[{i}] must be dict, got {type(bp_dict).__name__}",
+                "dfumt": "FALSE",
+            }
+        label = bp_dict.get("label", "")
+        expr = bp_dict.get("assertion_expr", "")
+        ctx = bp_dict.get("context", {})
+        if not isinstance(label, str) or not label.strip():
+            return {"error": f"breakpoints[{i}].label must be non-empty string", "dfumt": "FALSE"}
+        if not isinstance(expr, str) or not expr.strip():
+            return {"error": f"breakpoints[{i}].assertion_expr must be non-empty string", "dfumt": "FALSE"}
+        if not isinstance(ctx, dict):
+            return {"error": f"breakpoints[{i}].context must be dict, got {type(ctx).__name__}", "dfumt": "FALSE"}
+
+        try:
+            pred = compile_predicate_expression(expr, var_name="ctx")
+        except RestrictedExpressionError as e:
+            return {"error": f"breakpoints[{i}].assertion_expr rejected: {e}", "dfumt": "FALSE"}
+
+        # closure で ctx を bind、 引数なし callable にする
+        def make_assertion(pred=pred, ctx=ctx):
+            return lambda: pred(ctx)
+
+        parsed.append(Breakpoint(
+            label=label,
+            assertion=make_assertion(),
+            context=dict(ctx),
+        ))
+
+    result = assert_breakpoints(
+        claim=claim,
+        breakpoints=parsed,
+        audit=chain,
+        stop_on_first_failure=stop_on_first_failure,
+        max_time_sec=max_time_sec,
+    )
+
+    dfumt_map = {
+        "confirmed": "TRUE",
+        "refuted": "FALSE",
+        "holding": "NEITHER",
+        "incomplete_frame": "ZERO",
+    }
+    return {
+        "verdict": result.verdict.value,
+        "markers": [m.to_dict() for m in result.markers],
+        "audit_hashes": result.audit_hashes,
+        "claim": result.claim,
+        "started_at": result.started_at,
+        "ended_at": result.ended_at,
+        "duration_ms": result.duration_ms,
+        "dfumt": dfumt_map.get(result.verdict.value, "UNKNOWN"),
+    }
+
+
 def _reset_state_for_test() -> None:
     """test hook: in-memory registry を clear。 file は 触らず。"""
     _CHAINS.clear()
@@ -477,6 +584,34 @@ def _register_mcp():
             predicate_expr=predicate_expr,
             max_samples=max_samples, max_time_sec=max_time_sec,
             space_description=space_description,
+        )
+
+    @server.tool()
+    def assert_breakpoints_explicit(
+        chain_id: str,
+        claim: str,
+        breakpoints: list[dict],
+        stop_on_first_failure: bool = True,
+        max_time_sec: float = 60.0,
+    ) -> dict[str, Any]:
+        """labeled breakpoints (「その主張が偽なら 壊れる 具体的な 場所」) を 順次検査。
+
+        各 breakpoint dict は:
+          "label": str (人間可読 名前)
+          "assertion_expr": str (`ctx` binding、 True で 「この point で claim 保たれた」)
+          "context": dict (optional、 assertion_expr が ctx['xxx'] で 参照可能)
+
+        Verdict rule:
+          empty / 型不正         → INCOMPLETE_FRAME
+          任意 assertion False   → REFUTED (label + context を witness)
+          全 pass                → HOLDING (search_space marker、 case exhaustion 未 cover)
+          assertion raise        → frame marker 併記
+          time budget hit        → compute_budget marker 併記
+        """
+        return tool_assert_breakpoints_explicit(
+            chain_id=chain_id, claim=claim, breakpoints=breakpoints,
+            stop_on_first_failure=stop_on_first_failure,
+            max_time_sec=max_time_sec,
         )
 
     @server.tool()

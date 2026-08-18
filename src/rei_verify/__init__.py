@@ -46,6 +46,7 @@ def __getattr__(name: str):
         "tool_verify_audit_chain",
         "tool_record_verdict",
         "tool_refute_lean",
+        "tool_search_counterexample_explicit",
     ):
         from .mcp import (
             tool_create_audit_chain,
@@ -53,6 +54,7 @@ def __getattr__(name: str):
             tool_verify_audit_chain,
             tool_record_verdict,
             tool_refute_lean,
+            tool_search_counterexample_explicit,
         )
         return {
             "tool_create_audit_chain": tool_create_audit_chain,
@@ -60,6 +62,7 @@ def __getattr__(name: str):
             "tool_verify_audit_chain": tool_verify_audit_chain,
             "tool_record_verdict": tool_record_verdict,
             "tool_refute_lean": tool_refute_lean,
+            "tool_search_counterexample_explicit": tool_search_counterexample_explicit,
         }[name]
     if name in (
         "refute_lean_source",
@@ -70,4 +73,11 @@ def __getattr__(name: str):
     ):
         from . import refute as _refute
         return getattr(_refute, name)
+    if name in (
+        "search_counterexample",
+        "compile_predicate_expression",
+        "RestrictedExpressionError",
+    ):
+        from . import search as _search
+        return getattr(_search, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

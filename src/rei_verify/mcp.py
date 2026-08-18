@@ -258,6 +258,90 @@ def tool_refute_lean(
     }
 
 
+def tool_search_counterexample_explicit(
+    chain_id: str,
+    claim: str,
+    samples: list[Any],
+    predicate_expr: str,
+    max_samples: int = 10_000,
+    max_time_sec: float = 30.0,
+    space_description: str = "",
+) -> dict[str, Any]:
+    """explicit sample list + restricted expression で counter-example 探索。
+
+    MCP 経由での safe entrypoint = predicate は `x` variable のみを 使う 数値/boolean 判定
+    expression、 __import__ / exec / eval / open / attribute (`__`) は 事前 reject、
+    builtins は _SAFE_BUILTINS whitelist のみ 許可。
+
+    Verdict rule (search_counterexample と 同一):
+      - found → REFUTED (witness marker)
+      - exhausted → HOLDING (search_space marker、 「absence ≠ proof」)
+      - time/sample limit → HOLDING (compute_budget marker)
+      - predicate 構文 error / restricted eval violation → error dict return (invariant 到達前)
+
+    Args:
+      chain_id: create_audit_chain で 得た id。
+      claim: 検証対象の 主張 (自然言語)。
+      samples: 検証 sample list (server 側で iterate)。
+      predicate_expr: `x` variable を 使う expression、 True で 「その sample が claim を 反証する」。
+                      例: `"x % 3 == 0 and x > 100"`
+      max_samples: 打ち切り sample 数。
+      max_time_sec: 打ち切り wall-clock 秒。
+      space_description: 人間可読 記述 (marker に埋め込み)。
+
+    Returns:
+      success: {"verdict", "markers", "audit_hashes", "duration_ms", "dfumt"}
+      error:   {"error", "dfumt": "FALSE"}
+    """
+    chain = _CHAINS.get(chain_id)
+    if chain is None:
+        return {"error": f"chain not found: {chain_id!r}", "dfumt": "FALSE"}
+    if not claim or not claim.strip():
+        return {"error": "claim must be non-empty", "dfumt": "FALSE"}
+    if not isinstance(samples, list):
+        return {"error": f"samples must be list, got {type(samples).__name__}", "dfumt": "FALSE"}
+
+    from .search import (
+        search_counterexample,
+        compile_predicate_expression,
+        RestrictedExpressionError,
+    )
+
+    # predicate compile (restricted eval violation は 事前 error return)
+    try:
+        predicate = compile_predicate_expression(predicate_expr)
+    except RestrictedExpressionError as e:
+        return {"error": f"predicate rejected: {e}", "dfumt": "FALSE"}
+
+    result = search_counterexample(
+        claim=claim,
+        predicate=predicate,
+        space=iter(samples),  # iter で inline generator 化 (list を pass すると exhausted 意味変わる可能性回避)
+        audit=chain,
+        max_samples=max_samples,
+        max_time_sec=max_time_sec,
+        space_description=space_description or f"list of {len(samples)} samples",
+        sample_repr=repr,
+    )
+
+    dfumt_map = {
+        "confirmed": "TRUE",
+        "refuted": "FALSE",
+        "holding": "NEITHER",
+        "incomplete_frame": "ZERO",
+    }
+    return {
+        "verdict": result.verdict.value,
+        "markers": [m.to_dict() for m in result.markers],
+        "audit_hashes": result.audit_hashes,
+        "claim": result.claim,
+        "started_at": result.started_at,
+        "ended_at": result.ended_at,
+        "duration_ms": result.duration_ms,
+        "dfumt": dfumt_map.get(result.verdict.value, "UNKNOWN"),
+    }
+
+
 def _reset_state_for_test() -> None:
     """test hook: in-memory registry を clear。 file は 触らず。"""
     _CHAINS.clear()
@@ -356,6 +440,43 @@ def _register_mcp():
             theorem_name=theorem_name,
             allow_axioms=allow_axioms,
             timeout_sec=timeout_sec,
+        )
+
+    @server.tool()
+    def search_counterexample_explicit(
+        chain_id: str,
+        claim: str,
+        samples: list[Any],
+        predicate_expr: str,
+        max_samples: int = 10_000,
+        max_time_sec: float = 30.0,
+        space_description: str = "",
+    ) -> dict[str, Any]:
+        """explicit sample list + restricted expression で counter-example 探索。
+
+        MCP 経由 safe entrypoint = predicate は `x` variable のみ の 数値/boolean 判定
+        expression、 __import__ / exec / eval / open / attribute (`__`) は 事前 reject。
+
+        Verdict rule:
+          found       → REFUTED (witness marker)
+          exhausted   → HOLDING (search_space marker、 「absence ≠ proof」)
+          time/sample → HOLDING (compute_budget marker)
+
+        Args:
+          chain_id: create_audit_chain で 得た id。
+          claim: 検証対象の 主張。
+          samples: 検証 sample list。
+          predicate_expr: `x` variable を 使う expression。 True で 「その sample が claim を 反証」。
+                          例: "x % 3 == 0 and x > 100"
+          max_samples: 打ち切り sample 数 (default 10000)。
+          max_time_sec: 打ち切り wall-clock 秒 (default 30)。
+          space_description: 人間可読 記述 (marker 埋め込み)。
+        """
+        return tool_search_counterexample_explicit(
+            chain_id=chain_id, claim=claim, samples=samples,
+            predicate_expr=predicate_expr,
+            max_samples=max_samples, max_time_sec=max_time_sec,
+            space_description=space_description,
         )
 
     @server.tool()

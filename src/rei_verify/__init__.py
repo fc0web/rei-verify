@@ -23,7 +23,7 @@ from .core import (
 )
 from .audit import AuditChain, ChainVerification
 
-__version__ = "0.1.0-alpha"
+__version__ = "0.1.0a1"
 __author__ = "Nobuki Fujimoto"
 
 __all__ = [

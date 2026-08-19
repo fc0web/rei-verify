@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rei-verify"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "反証機械 (refutation machine) の 心臓部を 支える 4 primitives (Verdict / IncompleteMarker / AuditChain / VerifiedExecution) + MCP wrapper"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"

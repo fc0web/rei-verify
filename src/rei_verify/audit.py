@@ -145,23 +145,55 @@ class AuditChain:
                     continue
         return out
 
-    def verify(self) -> ChainVerification:
+    def verify(self, expect_at_least: int | None = None) -> ChainVerification:
         """chain 全体を walk して tamper detection。
 
-        broken_at = None : 全 chain 健全
+        broken_at = None : 全 chain 健全 (or 末尾切り詰め検出時 = None、 tail truncation
+                           は 「line が 破損」 でなく 「entry が 消失」 なので broken_at
+                           には 該当 index がない、 reason text で 区別可能)
         broken_at = int  : その index の entry から先が 改竄されている疑い
 
-        検出項目 (0.1.0a2 拡張):
+        Args:
+          expect_at_least: chain entry count の 期待 下限。 None (default) = 長さ check なし
+                           (0.1.0a2 従来動作)。 int 指定時 は chain 内部整合 + entry_count
+                           >= expect_at_least の 両方 verify。 不足時は ok=False + reason
+                           に 「tail truncation detected」 明示 return。
+
+        検出項目:
           - JSON parse fail
           - 行オブジェクト キー集合 が {seq, prev_hash, entry, hash, hash_version}
-            以外 = 予期しない 追加キー 注入 (findings ② 修正)
+            以外 = 予期しない 追加キー 注入 (0.1.0a2 findings ② 修正)
           - hash_version 欠落 = pre-0.1.0a2 format (破壊的変更、 chain 再作成が必要)
           - seq mismatch (順序 or 削除)
           - prev_hash mismatch (再 hash 辻褄合わせ を 次段で 検出)
-          - hash mismatch (tamper detected、 hash_version + seq + prev_hash + entry の
-            いずれかが 改竄されると 検出)
+          - hash mismatch (hash_version + seq + prev_hash + entry の いずれかが 改竄で 検出)
+          - tail truncation (0.1.0a3、 expect_at_least 指定時のみ = external anchor 経由)
+
+        ★ 構造的限界 (0.1.0a3 findings ④ 明示):
+          hash chain は 「過去の改変」 を 検出できるが 「未来の不在」 を 検出できない。
+          末尾 entry を 削除しても 残り部分は 内部整合が とれた状態 = expect_at_least なし
+          の verify() は ok=True を 返す (limitation)。 完全性 (completeness) 要件 は:
+            (a) expect_at_least=N opt-in (本実装、 最軽量 external anchor)
+            (b) 最終 hash を 別媒体 に 記録 + 突合 (application layer で 実装、 未提供)
+            (c) 末尾 seal entry pattern (application layer で 実装、 未提供)
+          詳細は DESIGN.md § Known limitations 参照。
         """
         if not self.path.exists():
+            # empty chain: honor expect_at_least even in this early-return branch
+            if expect_at_least is not None and expect_at_least > 0:
+                return ChainVerification(
+                    ok=False,
+                    entry_count=0,
+                    broken_at=None,
+                    last_hash=GENESIS_HASH,
+                    reason=(
+                        f"tail truncation detected: expected >= {expect_at_least} entries, "
+                        "got 0 (file does not exist). Hash chain cannot detect 'future absence' "
+                        "by its own structure; external anchor (expect_at_least param, external "
+                        "hash ledger, or seal entry pattern) is required for completeness "
+                        "verification (see DESIGN.md § Known limitations)."
+                    ),
+                )
             return ChainVerification(
                 ok=True,
                 entry_count=0,
@@ -270,6 +302,23 @@ class AuditChain:
 
                 prev_hash = obj["hash"]
                 seq_expected += 1
+
+        # tail truncation check (0.1.0a3 findings ④ mitigation、 opt-in via expect_at_least)
+        if expect_at_least is not None and seq_expected < expect_at_least:
+            return ChainVerification(
+                ok=False,
+                entry_count=seq_expected,
+                broken_at=None,   # 「line が 破損」 でなく 「entry が 消失」
+                last_hash=prev_hash,
+                reason=(
+                    f"tail truncation detected: expected >= {expect_at_least} entries, "
+                    f"got {seq_expected} (chain internally consistent but shorter than expected). "
+                    "Hash chain cannot detect 'future absence' by its own structure; "
+                    "external anchor (expect_at_least param, external hash ledger, or seal "
+                    "entry pattern) is required for completeness verification "
+                    "(see DESIGN.md § Known limitations)."
+                ),
+            )
 
         return ChainVerification(
             ok=True,

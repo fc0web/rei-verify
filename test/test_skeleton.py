@@ -218,6 +218,59 @@ with tempfile.TemporaryDirectory() as tdir:
 
 
 # ---------------------------------------------------------------------------
+# Test group 3c: findings ④ tail truncation opt-in mitigation (0.1.0a3)
+# ---------------------------------------------------------------------------
+
+print("\n[G3c] AuditChain expect_at_least opt-in (0.1.0a3 findings ④ mitigation)")
+
+with tempfile.TemporaryDirectory() as tdir:
+    chain_path = Path(tdir) / "truncation.jsonl"
+    ac = AuditChain(chain_path)
+    for i in range(5):
+        ac.append({"phase": "test", "step": i})
+
+    # Baseline: 5-entry clean chain, no expect_at_least → ok
+    v = ac.verify()
+    check(v.ok and v.entry_count == 5, "baseline: 5-entry chain verify OK without expect_at_least")
+
+    # Truncate to 3 entries (末尾 2 削除)
+    lines = chain_path.read_text(encoding="utf-8").splitlines()[:3]
+    chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # ★ LIMITATION verify: truncated chain without expect_at_least → still ok (structural)
+    ac_reload = AuditChain(chain_path)
+    v = ac_reload.verify()
+    check(
+        v.ok and v.entry_count == 3,
+        f"structural limitation: truncated chain WITHOUT expect_at_least → ok=True (findings ④ demo)",
+    )
+
+    # ★ MITIGATION verify: expect_at_least=5 → detects truncation
+    v = ac_reload.verify(expect_at_least=5)
+    check(
+        not v.ok and v.entry_count == 3 and v.broken_at is None,
+        f"mitigation: expect_at_least=5 → ok=False + entry_count=3 + broken_at=None (got ok={v.ok}, count={v.entry_count}, broken_at={v.broken_at})",
+    )
+    check(
+        "tail truncation" in v.reason and "expected >= 5" in v.reason and "got 3" in v.reason,
+        f"mitigation reason mentions tail truncation + expected + got (got {v.reason[:200]!r})",
+    )
+
+    # Minimum met: expect_at_least=3 on 3-entry truncated chain → ok
+    v = ac_reload.verify(expect_at_least=3)
+    check(v.ok, f"expect_at_least=3 on 3-entry chain → ok=True (minimum met)")
+
+    # Empty chain with expect_at_least
+    empty_path = Path(tdir) / "empty.jsonl"
+    ac_empty = AuditChain(empty_path)
+    v = ac_empty.verify(expect_at_least=1)
+    check(
+        not v.ok and "tail truncation" in v.reason,
+        f"empty chain with expect_at_least=1 → ok=False + tail truncation reason (got {v.reason[:100]!r})",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test group 4: AuditChain restart restore + genesis
 # ---------------------------------------------------------------------------
 

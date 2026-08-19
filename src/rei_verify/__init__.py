@@ -13,6 +13,18 @@ Design principle: 沈黙を 成功と 偽装しない。
   出すため CONFIRMED に 到達不能、 refute_lean のみ Lean 4 kernel sorry-free 経由)。
 
 Version:
+  0.1.0a3 (2026-08-19) — findings ④ tail truncation mitigation (opt-in) + docs Known limitations。
+    * AuditChain.verify() に expect_at_least: int | None = None kwarg 追加。
+      指定時に chain 内部整合 + entry_count >= expect_at_least の 両方 verify、
+      不足時は ok=False + 「tail truncation detected」 明示 reason return。
+      default None = 0.1.0a2 従来動作 (backward compat)。
+    * DESIGN.md 「Known limitations」 section 追加 (【L1】 hash chain の tail
+      truncation は 構造的に 検出不能、 (a)(b)(c) 3 mitigation options 明示)。
+    * findings ④ regression test [G3c] +6 assert (baseline / 構造的限界 demo /
+      opt-in mitigation / 最小限度 met / empty chain + expect_at_least)。
+    * cloud Claude 独立 verification (7 tamper attack test suite on 0.1.0a2、
+      6 検出 + 1 未検出 [tail truncation] を 発見)、 藤本さん経由 handoff。
+    * 全 test 209/0 PASS (skeleton 48 + MCP 30 + refute 22 + search 37 + breakpoint 33 + hold 39)。
   0.1.0a2 (2026-08-19) — findings ② hash injection fix + regression test。
     * BREAKING: AuditChain hash algorithm v1 → v2 (hash 入力に seq + prev_hash +
       hash_version 追加、 行オブジェクト キー集合 strict check)。 0.1.0a1 で 書かれた
@@ -38,7 +50,7 @@ from .core import (
 )
 from .audit import AuditChain, ChainVerification
 
-__version__ = "0.1.0a2"
+__version__ = "0.1.0a3"
 __author__ = "Nobuki Fujimoto"
 
 __all__ = [

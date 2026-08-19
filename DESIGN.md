@@ -117,6 +117,47 @@ chat-Claude 提案 + 私の 4 番目:
 | `check_scope_drift` | `VerifiedExecution` (pre=previous_scope_matches_current, post=action_within_scope) |
 | `verify_side_effects` | `VerifiedExecution` (pre=action_plan_declared, post=actual_side_effects ⊆ declared) |
 
+## Known limitations (constructive、 反証機械 discipline 遵守)
+
+反証機械 の core promise 「絶対に嘘をつかない」 は、 「限界を 隠さない」 も 含む。 以下は 実装上の 制約 で、 利用者は 承知した上で 適切な 外部 mitigation を 選択する 必要がある。
+
+### 【L1】 hash chain の tail truncation は 構造的に 検出不能 (0.1.0a3 findings ④、 cloud Claude session verification)
+
+**性質**: `AuditChain` の hash chain (v2、 0.1.0a2+) は 「過去の改変」 (entry 書き換え、 seq/prev_hash 改竄、 最上位 キー注入) を 全て 検出する が、 **「未来の不在」 は 検出できない**。 具体的には、 chain 末尾から N entries を 削除しても 残り部分は 内部整合 が とれた状態 = `verify()` は `ok=True` を 返す (limitation)。
+
+**根本原因**: Merkle-like hash chain は 各 entry が 「自分より 前の entry の hash」 を 参照する 構造。 削除された entry を 参照する 後続 entry は 存在しないため、 削除の 痕跡が chain 内部に 残らない。 これは 実装 bug ではなく hash chain family の **structural property**。
+
+**検出済 attack surface** (cloud Claude 7 通り 試行、 6 通り 検出、 1 通り 未検出):
+
+| 改竄 | 0.1.0a1 | 0.1.0a2 | 0.1.0a3 |
+|---|---|---|---|
+| entry 値書き換え | ✅ hash mismatch | ✅ | ✅ |
+| entry 削除 (中間) | ✅ seq mismatch | ✅ | ✅ |
+| 改竄 + hash 再計算 | ✅ prev_hash mismatch | ✅ | ✅ |
+| 最上位 キー注入 | ❌ 素通り | ✅ unexpected keys | ✅ |
+| 最上位 キー削除 | — | ✅ missing keys | ✅ |
+| seq 書き換え | — | ✅ seq mismatch | ✅ |
+| 行入れ替え | — | ✅ broken_at | ✅ |
+| **末尾切り詰め** | ❌ 素通り | ❌ **素通り** | ⚠️ `expect_at_least=N` 指定時のみ 検出 |
+
+### mitigation options
+
+| option | 実装 status | 使い方 |
+|---|---|---|
+| (a) `verify(expect_at_least=N)` opt-in parameter | ✅ 0.1.0a3 で 提供 | caller が 「N entries は 確実に append した」 と 知っている場合、 verify 時 に 引数指定、 不足時 は ok=False + 「tail truncation detected」 明示 reason |
+| (b) 最終 hash を 別媒体に 記録 + 突合 | ⏸ application layer で 実装、 未提供 | verify 後 `.last_hash` を 別 file/DB/commit log に 保存、 次回 verify 前に 一致確認 |
+| (c) 末尾 seal entry pattern | ⏸ application layer で 実装、 未提供 | 特定 marker entry (`{"phase": "seal", "final": True}`) を 末尾に append、 verify() 側で 「最終 entry が seal であること」 を confirm |
+
+### 選択指針
+
+- **軽量 case** (session 内 ephemeral audit trail、 例: reasoning trace): (a) `expect_at_least` で 十分。 各 tool call 後 に `expect_at_least = pre_call_count + expected_appends` で 突合。
+- **中程度 case** (multi-session 継続 audit): (a) + (b) 組合せ = expect_at_least で 短期防御 + 別媒体 hash 記録 で 長期突合。
+- **高信頼要件** (compliance、 tamper-evident logging、 forensic): (c) seal entry + Sigstore / Certificate Transparency のような 外部 append-only ledger (別 concern、 rei-verify scope 外)。
+
+### 反証機械 discipline との 整合
+
+本 limitation を **隠さず 明示** することが、 反証機械 の 「絶対に嘘をつかない」 core promise の 適用対象。 「audit chain が verify PASS」 の 意味を 利用者が 「chain が 完全 (complete)」 と 誤読すると、 refutation machine の 出力を 誤って 信用することになる = 「もっともらしいものを 確実に殺す 機械」 が、 自分自身に対して もっともらしさを 発する 状態。 これを 型 level では 完全には 防げない (hash chain の 構造的限界) が、 documentation + opt-in mitigation で **利用者が 認識した上で 選択できる** 状態を 提供する。
+
 ## 非目標 (out of scope for skeleton)
 
 - LLM integration (chat-Claude / GPT / Gemini 系) — 反証は 決定論的 side effect のみ

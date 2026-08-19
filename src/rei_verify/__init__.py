@@ -4,11 +4,26 @@ rei-verify — 共通 infrastructure for refutation-machine and framing-drift-de
 反証機械 (refutation machine) の 心臓部を 支える 4 primitives:
   1. Verdict (4-value enum: CONFIRMED / REFUTED / HOLDING / INCOMPLETE_FRAME)
   2. IncompleteMarker (「試されずに 残ったもの」 の 型化)
-  3. AuditChain (hash-chained append-only JSONL)
+  3. AuditChain (hash-chained append-only JSONL、 hash algorithm v2 in 0.1.0a2+)
   4. VerifiedExecution (pre-check + action + post-check + audit atomically)
 
 Design principle: 沈黙を 成功と 偽装しない。
-  CONFIRMED 以外の 全 verdict に IncompleteMarker が 必須。
+  CONFIRMED 以外の 全 verdict に IncompleteMarker が 必須 (型 level 強制)。
+  CONFIRMED の 信頼性は ツール層の 規律 (search / breakpoint / hold は 構造上 marker を
+  出すため CONFIRMED に 到達不能、 refute_lean のみ Lean 4 kernel sorry-free 経由)。
+
+Version:
+  0.1.0a2 (2026-08-19) — findings ② hash injection fix + regression test。
+    * BREAKING: AuditChain hash algorithm v1 → v2 (hash 入力に seq + prev_hash +
+      hash_version 追加、 行オブジェクト キー集合 strict check)。 0.1.0a1 で 書かれた
+      chain file は verify() を pass しない (hash_version 欠落 で 明示 error return)。
+      alpha 版として 破壊的変更 明記、 既存 chain の 移行 = 新規再作成 policy。
+    * findings ② regression test (top-level key injection detection、 test [G3b] 5 assert)。
+    * findings ① 明示訂正 = 「型 level で 保証」 は REFUTED/HOLDING/INCOMPLETE_FRAME
+      の 3 verdict のみ、 CONFIRMED は ツール層 discipline (README + DESIGN.md 更新)。
+    * findings ③ + max_time_sec 粒度 = docstring 追記 (search.py 拡張、 挙動変更なし)。
+    * 全 test 203/0 PASS (skeleton 42 + MCP 30 + refute 22 + search 37 + breakpoint 33 + hold 39)。
+  0.1.0a1 (2026-08-19) — initial: 4 primitives + 4 refutation tools + integration demo。
 
 See DESIGN.md for full rationale.
 """
@@ -23,7 +38,7 @@ from .core import (
 )
 from .audit import AuditChain, ChainVerification
 
-__version__ = "0.1.0a1"
+__version__ = "0.1.0a2"
 __author__ = "Nobuki Fujimoto"
 
 __all__ = [

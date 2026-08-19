@@ -175,6 +175,49 @@ with tempfile.TemporaryDirectory() as tdir:
 
 
 # ---------------------------------------------------------------------------
+# Test group 3b: findings ② top-level key injection detection (0.1.0a2 fix)
+# ---------------------------------------------------------------------------
+
+print("\n[G3b] AuditChain top-level key injection (0.1.0a2 findings ② regression)")
+
+with tempfile.TemporaryDirectory() as tdir:
+    chain_path = Path(tdir) / "injection.jsonl"
+    ac = AuditChain(chain_path)
+    for i in range(5):
+        ac.append({"phase": "test", "step": i})
+
+    v = ac.verify()
+    check(v.ok and v.entry_count == 5, "5-entry clean chain verify OK before injection")
+
+    # Inject unexpected top-level key into line index 2
+    lines = chain_path.read_text(encoding="utf-8").splitlines()
+    obj = json.loads(lines[2])
+    obj["note"] = "INJECTED_AT_TOPLEVEL"        # entry の外側に追加キー
+    lines[2] = json.dumps(obj, ensure_ascii=False, sort_keys=True)
+    chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    v = ac.verify()
+    check(not v.ok, f"top-level key injection detected → verify.ok == False (got {v.ok})")
+    check(v.broken_at == 2, f"broken_at points to injected line (expected 2, got {v.broken_at})")
+    check(
+        "unexpected keys" in v.reason or "line-object key set" in v.reason,
+        f"reason mentions key set mismatch (got {v.reason!r})",
+    )
+    # ★ pre-0.1.0a2 (findings ②) では 素通り = ok=True だった。 0.1.0a2 で 検出可能に。
+
+    # 別 tampering: hash_version 欠落 chain (pre-0.1.0a2 format 検出)
+    old_format_path = Path(tdir) / "old_format.jsonl"
+    old_line = {"seq": 0, "prev_hash": "0" * 64, "entry": {"legacy": True}, "hash": "abcd" * 16}
+    old_format_path.write_text(json.dumps(old_line, sort_keys=True) + "\n", encoding="utf-8")
+    ac_old = AuditChain(old_format_path)
+    v = ac_old.verify()
+    check(
+        not v.ok and "hash_version key missing" in v.reason,
+        f"pre-0.1.0a2 format detected with clear error (got {v.reason!r})",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test group 4: AuditChain restart restore + genesis
 # ---------------------------------------------------------------------------
 

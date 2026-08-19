@@ -65,6 +65,14 @@ def search_counterexample(
 
     Returns:
       VerdictWithMarkers。 CONFIRMED は 返さない (「absence ≠ proof」 discipline)。
+
+    ★ max_time_sec の 粒度 (0.1.0a2 findings 補足):
+      時間 budget check は **predicate 1 回の完了ごと** に行われる (loop 冒頭)。
+      単一の 極端に重い predicate (例 `sum(range(60_000_000)) < 0` で 実測 ~1 sec)
+      に対しては max_time_sec=0.5 を 指定しても 実測 ~1 sec 掛かる (超過幅 = predicate
+      1 回分)。 これは 設計上の帰結 (per-sample budget granularity)、 バグではない。
+      hard wall-clock deadline が 必要なら caller 側で signal.alarm / threading Timer
+      を 追加する。
     """
     sample_repr_fn = sample_repr if sample_repr is not None else repr
     desc = space_description or "user-provided space"
@@ -248,7 +256,18 @@ def compile_predicate_expression(
       p = compile_predicate_expression("ctx['n'] > 0", var_name="ctx")
       p({"n": 5})  # True
 
-    許可された builtins は _SAFE_BUILTINS のみ (import / attribute access は blocked)。
+    ★ Sandbox 設計 (0.1.0a2 findings ③ 明示):
+      本 sandbox は **多層防御** で 単層完全防御ではない:
+        (1) blocklist filter (`__` / `import` / `exec(` / `eval(` / `open(` / `compile(`
+            / `globals(` / `locals(` の 部分文字列拒否) = 第 1 段、 substring match
+            のため `open ('/etc/passwd')` (空白挿入) 等は 通過する
+        (2) `eval` globals の `__builtins__` を `_SAFE_BUILTINS` whitelist に 差替 =
+            第 2 段、 blocklist を 通過した `open` 等は 実行時 `NameError` で 落ちる
+      **実防御は (2) の whitelist 差替**、 (1) は 早期 reject 用の filter。
+      0.1.0a1 findings ③ で 4 迂回 pattern 試行 (`x.__class__`/空白 open/全角
+      アンダースコア/NFKC) 全 拒否 or NameError で 実害 0 confirm 済。 高信頼要件
+      で AST allowlist が 必要なら `ast.parse` + Attribute/Call callee whitelist
+      を 別 layer で 実装する。
     """
     if not isinstance(expr, str) or not expr.strip():
         raise RestrictedExpressionError("predicate expression must be non-empty string")

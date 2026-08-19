@@ -6,8 +6,20 @@ Pattern: STEP 1340 rei-automator-mcp AuditLogWriter の 汎用抽出。
 
 Invariant:
   - append() は 常に 新 entry hash を 返す
-  - verify() は tamper detection (brokenAt index or None)
-  - hash algorithm: sha256(prev_hash + json.dumps(entry, sort_keys=True))
+  - verify() は tamper detection (broken_at index or None)
+  - hash algorithm v2 (0.1.0a2+):
+      sha256(hash_version || \\n || seq || \\n || prev_hash || \\n ||
+             json.dumps(entry, sort_keys=True))
+    hash 入力に seq + prev_hash + hash_version が含まれるため、 行オブジェクト
+    最上位への キー注入 が verify() で 検出される (0.1.0a1 の findings ② 修正)。
+  - verify() は 行オブジェクトの キー集合を {seq, prev_hash, entry, hash, hash_version}
+    に限定 = 予期しない 追加キー を broken_at で 検出。
+
+BREAKING CHANGE (0.1.0a1 → 0.1.0a2):
+  hash algorithm v1 (0.1.0a1) は seq / prev_hash を hash 入力に含まなかった。
+  v1 で書かれた chain file は 0.1.0a2 の verify() を pass しない (hash_version 欠落 で
+  early error return)。 alpha 版として 破壊的変更を 明示、 既存 chain の 移行 policy は
+  「新規 chain として 再作成」 (audit trail は 通常 short-lived、 permanent archive でない)。
 """
 from __future__ import annotations
 
@@ -19,6 +31,8 @@ from pathlib import Path
 
 
 GENESIS_HASH = "0" * 64  # SHA-256 の 空 chain 前 hash
+HASH_VERSION = 2         # 0.1.0a2+ hash algorithm version
+_ALLOWED_LINE_KEYS = frozenset({"seq", "prev_hash", "entry", "hash", "hash_version"})
 
 
 @dataclass(frozen=True)
@@ -39,9 +53,9 @@ class ChainVerification:
 class AuditChain:
     """Hash-chained append-only JSONL log。
 
-    File format (1 line per entry):
-      {"seq": 0, "prev_hash": "0...0", "entry": {...}, "hash": "abcd..."}
-      {"seq": 1, "prev_hash": "abcd...", "entry": {...}, "hash": "efgh..."}
+    File format (1 line per entry、 0.1.0a2 hash v2):
+      {"hash_version": 2, "seq": 0, "prev_hash": "0...0", "entry": {...}, "hash": "abcd..."}
+      {"hash_version": 2, "seq": 1, "prev_hash": "abcd...", "entry": {...}, "hash": "efgh..."}
       ...
 
     File is created on first append if parent dir exists.
@@ -71,8 +85,17 @@ class AuditChain:
             pass
 
     @staticmethod
-    def _hash_step(prev_hash: str, entry_json: str) -> str:
+    def _hash_step(hash_version: int, seq: int, prev_hash: str, entry_json: str) -> str:
+        """hash algorithm v2 (0.1.0a2+): hash_version + seq + prev_hash + entry_json。
+
+        seq と prev_hash を hash 入力に含めることで、 行オブジェクト最上位への
+        キー注入 (findings ②) が hash mismatch として 検出可能になる。
+        """
         h = hashlib.sha256()
+        h.update(str(hash_version).encode("utf-8"))
+        h.update(b"\n")
+        h.update(str(seq).encode("utf-8"))
+        h.update(b"\n")
         h.update(prev_hash.encode("utf-8"))
         h.update(b"\n")
         h.update(entry_json.encode("utf-8"))
@@ -84,9 +107,12 @@ class AuditChain:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
         entry_json = json.dumps(entry, ensure_ascii=False, sort_keys=True)
-        new_hash = self._hash_step(self._last_hash, entry_json)
+        new_hash = self._hash_step(
+            HASH_VERSION, self._entry_count, self._last_hash, entry_json,
+        )
 
         line_obj = {
+            "hash_version": HASH_VERSION,
             "seq": self._entry_count,
             "prev_hash": self._last_hash,
             "entry": entry,
@@ -124,6 +150,16 @@ class AuditChain:
 
         broken_at = None : 全 chain 健全
         broken_at = int  : その index の entry から先が 改竄されている疑い
+
+        検出項目 (0.1.0a2 拡張):
+          - JSON parse fail
+          - 行オブジェクト キー集合 が {seq, prev_hash, entry, hash, hash_version}
+            以外 = 予期しない 追加キー 注入 (findings ② 修正)
+          - hash_version 欠落 = pre-0.1.0a2 format (破壊的変更、 chain 再作成が必要)
+          - seq mismatch (順序 or 削除)
+          - prev_hash mismatch (再 hash 辻褄合わせ を 次段で 検出)
+          - hash mismatch (tamper detected、 hash_version + seq + prev_hash + entry の
+            いずれかが 改竄されると 検出)
         """
         if not self.path.exists():
             return ChainVerification(
@@ -153,6 +189,51 @@ class AuditChain:
                         reason=f"line {line_no}: JSONDecodeError",
                     )
 
+                # hash_version check (pre-0.1.0a2 format 検出)
+                if "hash_version" not in obj:
+                    return ChainVerification(
+                        ok=False,
+                        entry_count=seq_expected,
+                        broken_at=line_no,
+                        last_hash=prev_hash,
+                        reason=(
+                            f"line {line_no}: hash_version key missing "
+                            "(pre-0.1.0a2 format; chain must be re-created — "
+                            "breaking change in 0.1.0a2 to detect top-level key injection)"
+                        ),
+                    )
+
+                # line key set strict check (findings ② 修正: 未知キー注入 検出)
+                actual_keys = set(obj.keys())
+                if actual_keys != _ALLOWED_LINE_KEYS:
+                    unexpected = actual_keys - _ALLOWED_LINE_KEYS
+                    missing = _ALLOWED_LINE_KEYS - actual_keys
+                    reason_parts = [f"line {line_no}: line-object key set mismatch"]
+                    if unexpected:
+                        reason_parts.append(f"unexpected keys: {sorted(unexpected)}")
+                    if missing:
+                        reason_parts.append(f"missing keys: {sorted(missing)}")
+                    return ChainVerification(
+                        ok=False,
+                        entry_count=seq_expected,
+                        broken_at=line_no,
+                        last_hash=prev_hash,
+                        reason=" | ".join(reason_parts),
+                    )
+
+                # hash_version value check
+                if obj["hash_version"] != HASH_VERSION:
+                    return ChainVerification(
+                        ok=False,
+                        entry_count=seq_expected,
+                        broken_at=line_no,
+                        last_hash=prev_hash,
+                        reason=(
+                            f"line {line_no}: unsupported hash_version "
+                            f"(expected {HASH_VERSION}, got {obj['hash_version']})"
+                        ),
+                    )
+
                 # seq check
                 if obj.get("seq") != seq_expected:
                     return ChainVerification(
@@ -173,9 +254,11 @@ class AuditChain:
                         reason=f"line {line_no}: prev_hash mismatch",
                     )
 
-                # hash recompute check
+                # hash recompute check (v2: hash_version + seq + prev_hash + entry)
                 entry_json = json.dumps(obj["entry"], ensure_ascii=False, sort_keys=True)
-                expected_hash = self._hash_step(prev_hash, entry_json)
+                expected_hash = self._hash_step(
+                    obj["hash_version"], obj["seq"], prev_hash, entry_json,
+                )
                 if obj.get("hash") != expected_hash:
                     return ChainVerification(
                         ok=False,
@@ -193,5 +276,5 @@ class AuditChain:
             entry_count=seq_expected,
             broken_at=None,
             last_hash=prev_hash,
-            reason=f"ok ({seq_expected} entries)",
+            reason=f"ok ({seq_expected} entries, hash_version={HASH_VERSION})",
         )

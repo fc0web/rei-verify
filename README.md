@@ -33,7 +33,11 @@ class Verdict(str, Enum):
 
 Binary TRUE/FALSE に しない = **反証されなかった ≠ 正しい**。 IUT 12 年 holding discipline の 型化。
 
-**「沈黙を 成功と 偽装しない」 型的保証**: `CONFIRMED` 以外の 全 verdict に `IncompleteMarker` (dimension + what_was_tried + what_was_not_tried + reason) が **1 個以上 必須** (dataclass invariant、 破れない)。
+**「沈黙を 成功と 偽装しない」 型的保証** (正確な範囲):
+- `REFUTED` / `HOLDING` / `INCOMPLETE_FRAME` の 3 verdict は **`IncompleteMarker` 1 個以上 必須** = `VerdictWithMarkers` dataclass invariant で ValueError raise (0.1.0a1 実測で 3 verdict 全 型拒否 verify 済)
+- `CONFIRMED` は marker 不要 = 型 level では marker 空 CONFIRMED 構築を 拒否しない
+- **CONFIRMED の 信頼性は ツール層の 規律で 保証**: `search_counterexample` / `assert_breakpoints` / `hold_verdict` は 構造上 常に marker を 出すため CONFIRMED に 到達不能、 `refute_lean_source` のみが Lean 4 kernel の sorry-free 認定を 経由して CONFIRMED を 返す設計
+- caller が `VerdictWithMarkers(verdict=CONFIRMED, markers=[], ...)` を 直接構築することは 型的には 可能 (0.1.0a2 findings ① 明示訂正、 従前 「型 level で 保証」 は 過大主張)
 
 ---
 

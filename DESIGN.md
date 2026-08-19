@@ -43,11 +43,15 @@ class IncompleteMarker:
     reason: str             # なぜ 試さなかったか
 ```
 
-**Invariant** (`VerifiedExecution` layer で 強制):
-- `Verdict != CONFIRMED` の 全ての verdict に **1 個以上** の marker が 必須
-- CONFIRMED に marker を 付けても 良い (透明性向上)、但し 「incomplete と言いつつ CONFIRMED」 は type error
+**Invariant** (`VerdictWithMarkers` dataclass __post_init__ で 強制):
+- `Verdict != CONFIRMED` の 全ての verdict に **1 個以上** の marker が 必須 → 違反で `ValueError`
+- CONFIRMED は marker 不要 = 型 level では marker 空 CONFIRMED 構築を 拒否しない
+- 「incomplete と言いつつ CONFIRMED」 は type error にならない (0.1.0a2 findings ① 明示訂正)
 
-これが 「沈黙を 成功と偽装しない」 discipline の 構造的保証。
+**「沈黙を 成功と偽装しない」 discipline の 正確な範囲**:
+- **型 level 強制** = REFUTED / HOLDING / INCOMPLETE_FRAME の 3 verdict (marker 必須)
+- **ツール層 規律で 保証** = CONFIRMED (search / breakpoint / hold は 構造上 marker を 出すため CONFIRMED に 到達不能、 refute_lean のみ Lean 4 kernel sorry-free 認定を 経由)
+- caller が `VerdictWithMarkers(verdict=CONFIRMED, markers=[], ...)` を 直接構築することは 型的には 可能 = 「型 level で 保証」 は 3 verdict 側のみ。 0.1.0a1 findings ① で 明示訂正。
 
 ### 3. `AuditChain`
 
